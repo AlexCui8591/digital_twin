@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HRCDT dash board</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/OBJLoader.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+    
+    <style>
+        /* 保持原有样式不变 */
+        body { margin: 0; overflow: hidden; background-color: #0b0f19; font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #e0e6ed; user-select: none; }
+        #app-container { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; display: grid; grid-template-columns: 340px 1fr 340px; grid-template-rows: 1fr 70px; pointer-events: none; }
+        #canvas-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 0; }
+        .panel { background: rgba(17, 24, 39, 0.85); backdrop-filter: blur(12px); border: 1px solid rgba(75, 85, 99, 0.4); padding: 20px; pointer-events: auto; display: flex; flex-direction: column; gap: 15px; box-shadow: 0 8px 32px rgba(0,0,0,0.5); min-height: 0; overflow-y: auto; transition: border-color 0.3s; }
+        .panel:hover { border-color: rgba(96, 165, 250, 0.6); }
+        .panel-left { grid-column: 1; grid-row: 1; margin: 15px; border-radius: 12px; border-right: 1px solid #374151; }
+        .panel-right { grid-column: 3; grid-row: 1; margin: 15px; border-radius: 12px; border-left: 1px solid #374151; }
+        .panel-bottom { grid-column: 1 / span 3; grid-row: 2; display: flex; align-items: center; justify-content: space-evenly; background: rgba(11, 15, 25, 0.95); border-top: 1px solid #374151; font-size: 0.9rem; pointer-events: auto; }
+        h2 { margin: 0 0 10px 0; font-size: 1.1rem; color: #60a5fa; border-bottom: 2px solid #374151; padding-bottom: 8px; letter-spacing: 1px; }
+        .data-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+        .label { color: #9ca3af; font-size: 0.85rem; }
+        .value { font-weight: bold; font-family: 'Courier New', monospace; }
+        .ssm-bar-container { width: 100%; height: 8px; background: #1f2937; border-radius: 4px; overflow: hidden; position: relative; margin-top: 8px; }
+        .ssm-bar-fill { height: 100%; width: 100%; background: linear-gradient(90deg, #ef4444 25%, #f59e0b 50%, #10b981 100%); }
+        .ssm-marker { width: 4px; height: 16px; background: #fff; position: absolute; top: -4px; border-radius: 2px; box-shadow: 0 0 8px rgba(255,255,255,0.8); transition: left 0.2s ease-out; }
+        .alert-box { background: rgba(239, 68, 68, 0.1); border: 1px solid #ef4444; color: #fca5a5; padding: 12px; border-radius: 6px; text-align: center; opacity: 0.5; transition: all 0.3s; }
+        .alert-box.active { opacity: 1; background: rgba(239, 68, 68, 0.25); box-shadow: 0 0 15px rgba(239, 68, 68, 0.2); animation: pulse 1s infinite; }
+        @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.02); } 100% { transform: scale(1); } }
+        .chart-wrapper { position: relative; width: 100%; flex-grow: 1; min-height: 120px; max-height: 200px; }
+        .diag-item { display: flex; align-items: center; gap: 8px; }
+        #loading-status { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(17, 24, 39, 0.95); padding: 40px; border-radius: 16px; text-align: center; z-index: 1000; border: 1px solid #374151; box-shadow: 0 0 50px rgba(0,0,0,0.8); }
+        .spinner { width: 40px; height: 40px; border: 4px solid #1f2937; border-top: 4px solid #60a5fa; border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto 20px auto; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+
+    <div id="canvas-container"></div>
+    <div id="loading-status">
+        <div class="spinner"></div>
+        <div class="loading-text">Initialise the simulation system...</div>
+        <div class="loading-detail" id="loading-info">Establishing data stream connection</div>
+    </div>
+
+    <div id="app-container">
+        <div class="panel panel-left">
+            <h2>🛡️ Security Monitoring Centre</h2>
+            <div>
+                <div class="data-row">
+                    <span class="label">Real-time human-machine distance (SSM)</span>
+                    <span class="value" id="val-dist" style="font-size: 1.4rem; color: #fff;">-- m</span>
+                </div>
+                <div style="position:relative; margin-bottom: 15px;">
+                    <div class="ssm-bar-container"><div class="ssm-bar-fill"></div></div>
+                    <div class="ssm-marker" id="ssm-marker" style="left: 100%;"></div>
+                </div>
+            </div>
+            <div class="data-row" style="background: rgba(255,255,255,0.05); padding: 10px; border-radius: 6px;">
+                <span class="label">Current regional status</span>
+                <div id="zone-status" style="font-weight:bold; color:#10b981;">INITIALIZING...</div>
+            </div>
+            <div id="ttc-container" class="alert-box">
+                <div style="font-size: 0.8rem;">Collision Warning (TTC)</div>
+                <span id="val-ttc" style="font-size: 1.6rem; font-weight: bold;">--</span>
+            </div>
+            <div style="flex-grow: 1; display: flex; flex-direction: column;">
+                <!-- 风险指数现在会根据距离变化 -->
+                <div class="data-row">
+                    <div class="label">Real-time Risk Index</div>
+                    <div class="value" id="val-risk-score" style="color: #f59e0b">0</div>
+                </div>
+                <div class="chart-wrapper">
+                    <canvas id="riskChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <div class="panel panel-right">
+            <h2>⚡ Production line operational status</h2>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                <div style="background: rgba(255,255,255,0.03); padding: 10px; border-radius: 6px; text-align: center;">
+                    <div class="label">throughput (UPH)</div>
+                    <!-- 动态数据 -->
+                    <div class="value" id="val-uph" style="color:#60a5fa; font-size: 1.2rem;">342</div>
+                </div>
+                <div style="background: rgba(255,255,255,0.03); padding: 10px; border-radius: 6px; text-align: center;">
+                    <div class="label">Beat time (CT)</div>
+                    <!-- 动态数据 -->
+                    <div class="value" id="val-ct" style="color:#fff; font-size: 1.2rem;">14.2s</div>
+                </div>
+            </div>
+            <div style="flex-grow: 1; display: flex; flex-direction: column; margin-top:10px;">
+                <div class="label" style="margin-bottom:5px;">Equipment OEE Distribution</div>
+                <div class="chart-wrapper">
+                    <canvas id="utilChart"></canvas>
+                </div>
+            </div>
+            <div style="margin-top: auto; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 6px;">
+                <div class="data-row">
+                    <span class="label">Task: BATCH-X92</span>
+                    <!-- 动态数据 -->
+                    <span class="value" id="val-progress-text" style="color:#60a5fa;">0%</span>
+                </div>
+                <div style="width:100%; background:#374151; height:6px; border-radius: 3px;">
+                    <!-- 动态进度条 -->
+                    <div id="val-progress-bar" style="width:0%; background:#3b82f6; height:100%; transition: width 0.2s;"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="panel panel-bottom">
+            <div class="diag-item"><span class="label">Network:</span><span class="value" id="val-latency" style="color:#10b981">24 ms</span></div>
+            <div class="diag-item"><span class="label">Robot CPU:</span><span class="value">42%</span></div>
+            <div class="diag-item"><span class="label">Safety PLC:</span><span class="value" style="color:#10b981">ONLINE</span></div>
+            <div class="diag-item"><span class="label">FPS:</span><span class="value" id="val-fps">60</span></div>
+            <div class="diag-item"><span class="label">Uptime:</span><span class="value">142h 20m</span></div>
+        </div>
+    </div>
+
+    <script>
+        // ========== 1. 全局配置 ==========
+        const CONFIG = {
+            robot: { path: './robotic_arm.obj', 
+            scale: 0.001, 
+            color: 0xff9900, 
+            type: 'solid' },
+
+            human: {
+                path: 'IronMan.obj',
+                scale: 0.01,
+                color: 0x00FFFF,     // 幽灵青
+                type: 'ghost',       // 保持幽灵模式
+                startPos: { x: 4, y: 0, z: 4 }
+            },
+            env: { bgColor: 0x0b0f19, gridColor: 0x374151 },
+            // 新增：约束配置
+            limit: { radius: 8.0 } // 限制半径 8米
+        };
+
+        let scene, camera, renderer, clock;
+        let robotGroup, humanGroup, ghostPath;
+        let modelsLoaded = { robot: false, human: false };
+        let humanTarget = new THREE.Vector3(4, 0, 4);
+        const trailHistory = [];
+        
+        // 图表实例
+        let riskChartInst = null;
+        let utilChartInst = null;
+        
+        // 模拟变量
+        let taskProgress = 0;
+        let timeAccumulator = 0; // 用于控制UI刷新频率
+
+        // ========== 2. 初始化场景 ==========
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(CONFIG.env.bgColor);
+            scene.fog = new THREE.Fog(CONFIG.env.bgColor, 10, 40); // 调整雾气以适应更大范围
+
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(10, 12, 15); // 视角稍微拉远，为了看到8米范围
+            camera.lookAt(0, 0, 0);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            // 灯光
+            scene.add(new THREE.AmbientLight(0x404040, 2));
+            const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
+            dirLight.position.set(5, 15, 10);
+            dirLight.castShadow = true;
+            scene.add(dirLight);
+            
+            // 幽灵特效蓝光
+            const blueLight = new THREE.PointLight(0x3b82f6, 1, 25);
+            blueLight.position.set(0, 5, 0);
+            scene.add(blueLight);
+
+            // 地面网格
+            const gridHelper = new THREE.GridHelper(30, 30, CONFIG.env.gridColor, 0x1f2937);
+            scene.add(gridHelper);
+
+            // 绘制边界圈 (8m) - 视觉辅助
+            const boundaryGeo = new THREE.RingGeometry(7.9, 8.0, 64);
+            boundaryGeo.rotateX(-Math.PI/2);
+            const boundaryMesh = new THREE.Mesh(boundaryGeo, new THREE.MeshBasicMaterial({ color: 0x374151, side: THREE.DoubleSide }));
+            boundaryMesh.position.y = 0.01;
+            scene.add(boundaryMesh);
+
+            createSafetyZones();
+
+            robotGroup = new THREE.Group();
+            humanGroup = new THREE.Group();
+            scene.add(robotGroup);
+            scene.add(humanGroup);
+
+            createGhostPath();
+            clock = new THREE.Clock();
+            
+            initCharts();       // 初始化图表
+            setupInteraction();
+            loadModels();
+            animate();
+        }
+
+        // ========== 3. 图表初始化与逻辑 ==========
+        function initCharts() {
+            // 风险图表 (动态更新)
+            const riskCtx = document.getElementById('riskChart').getContext('2d');
+            riskChartInst = new Chart(riskCtx, {
+                type: 'line',
+                data: {
+                    labels: Array(20).fill(''), // 显示最近20个点
+                    datasets: [{ 
+                        data: Array(20).fill(10), 
+                        borderColor: '#f59e0b', 
+                        backgroundColor: (ctx) => {
+                            const gradient = ctx.chart.ctx.createLinearGradient(0, 0, 0, 200);
+                            gradient.addColorStop(0, 'rgba(245,158,11,0.5)');
+                            gradient.addColorStop(1, 'rgba(245,158,11,0)');
+                            return gradient;
+                        },
+                        fill: true, 
+                        tension: 0.4, 
+                        pointRadius: 0 
+                    }]
+                },
+                options: { 
+                    responsive: true, 
+                    maintainAspectRatio: false, 
+                    animation: false, // 关闭动画以提高性能
+                    plugins: { legend: { display: false } }, 
+                    scales: { x: { display: false }, y: { display: true, min: 0, max: 100, grid: { color: '#374151' } } } 
+                }
+            });
+
+            // 设备利用率图表
+            const utilCtx = document.getElementById('utilChart').getContext('2d');
+            utilChartInst = new Chart(utilCtx, {
+                type: 'doughnut',
+                data: { labels: ['Running', 'Idle', 'Error'], datasets: [{ data: [65, 25, 10], backgroundColor: ['#10b981', '#3b82f6', '#ef4444'], borderWidth: 0 }] },
+                options: { responsive: true, maintainAspectRatio: false, cutout: '75%', plugins: { legend: { position: 'right', labels: { font: { size: 11 }, color: '#9ca3af', boxWidth: 10 } } } }
+            });
+        }
+
+        // ========== 4. 模型加载 (包含幽灵逻辑) ==========
+        function loadModels() {
+            const loader = new THREE.OBJLoader();
+            
+            // 机器人加载 (略，保持原样或回退)
+            loader.load(CONFIG.robot.path, 
+                (obj) => { setupModel(obj, CONFIG.robot, robotGroup); modelsLoaded.robot = true; checkLoadStatus(); }, 
+                undefined, 
+                () => { createFallbackRobot(); modelsLoaded.robot = true; checkLoadStatus(); }
+            );
+
+            // 人类加载
+            loader.load(CONFIG.human.path, 
+                (obj) => { setupModel(obj, CONFIG.human, humanGroup); modelsLoaded.human = true; checkLoadStatus(); }, 
+                undefined, 
+                () => { createFallbackHuman(); modelsLoaded.human = true; checkLoadStatus(); }
+            );
+        }
+
+        function setupModel(obj, config, group) {
+            obj.scale.set(config.scale, config.scale, config.scale);
+            obj.traverse(child => {
+                if (child.isMesh) {
+                    if (config.type === 'ghost') {
+                        // 幽灵材质
+                        child.material = new THREE.MeshStandardMaterial({ 
+                            color: config.color, 
+                            transparent: true, opacity: 0.3, side: THREE.DoubleSide,
+                            depthWrite: false, blending: THREE.AdditiveBlending,
+                            emissive: config.color, emissiveIntensity: 0.5
+                        });
+                        child.renderOrder = 1;
+                    } else {
+                        // 实体材质
+                        child.material = new THREE.MeshStandardMaterial({ color: config.color, metalness: 0.6, roughness: 0.4 });
+                        child.castShadow = true; child.receiveShadow = true;
+                    }
+                }
+            });
+            const box = new THREE.Box3().setFromObject(obj);
+            const center = box.getCenter(new THREE.Vector3());
+            obj.position.sub(center); 
+            obj.position.y += (box.max.y - box.min.y) / 2 * config.scale + (config.type==='ghost'?0.2:0);
+            if(config.startPos) group.position.set(config.startPos.x, config.startPos.y, config.startPos.z);
+            group.add(obj);
+        }
+
+        function createFallbackRobot() {
+            const geo = new THREE.BoxGeometry(0.5, 1.5, 0.5);
+            const mat = new THREE.MeshStandardMaterial({ color: CONFIG.robot.color });
+            const mesh = new THREE.Mesh(geo, mat); mesh.position.y = 0.75; mesh.castShadow=true;
+            robotGroup.add(mesh);
+        }
+
+        function createFallbackHuman() {
+            const geo = new THREE.CylinderGeometry(0.3, 0.3, 1.7, 16);
+            const mat = new THREE.MeshStandardMaterial({ 
+                color: CONFIG.human.color, transparent: true, opacity: 0.3,
+                emissive: CONFIG.human.color, emissiveIntensity: 0.6,
+                depthWrite: false, blending: THREE.AdditiveBlending
+            });
+            const mesh = new THREE.Mesh(geo, mat); mesh.position.y = 0.85;
+            humanGroup.add(mesh);
+            humanGroup.position.set(4,0,4);
+        }
+
+        function checkLoadStatus() {
+            if (modelsLoaded.robot && modelsLoaded.human) {
+                document.getElementById('loading-status').style.display = 'none';
+            }
+        }
+
+        // ========== 5. 场景辅助 ==========
+        function createSafetyZones() {
+            const mat = (c) => new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: 0.08, side: THREE.DoubleSide, depthWrite: false });
+            scene.add(new THREE.Mesh(new THREE.CircleGeometry(6, 64), mat(0x10b981)).rotateX(-Math.PI/2).translateY(0.02));
+            scene.add(new THREE.Mesh(new THREE.CircleGeometry(3, 64), mat(0xf59e0b)).rotateX(-Math.PI/2).translateY(0.03));
+            scene.add(new THREE.Mesh(new THREE.CircleGeometry(1.5, 64), mat(0xef4444)).rotateX(-Math.PI/2).translateY(0.04));
+        }
+
+        function createGhostPath() {
+            const geo = new THREE.BufferGeometry();
+            geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(200 * 3), 3));
+            ghostPath = new THREE.Line(geo, new THREE.LineBasicMaterial({ 
+                color: CONFIG.human.color, opacity: 0.4, transparent: true, blending: THREE.AdditiveBlending 
+            }));
+            scene.add(ghostPath);
+        }
+
+        // ========== 6. 核心逻辑：移动、数据、风险 ==========
+        
+        function animate() {
+            requestAnimationFrame(animate);
+            const delta = clock.getDelta();
+            const elapsed = clock.getElapsedTime();
+
+            // 幽灵浮动
+            if (modelsLoaded.human) {
+                humanGroup.children.forEach(c => c.position.y += Math.sin(elapsed * 3) * 0.0015);
+                updateHumanMovement(delta);
+            }
+            
+            // 每0.5秒刷新一次数据和图表，避免过于频繁
+            timeAccumulator += delta;
+            if (timeAccumulator > 0.5) {
+                if (modelsLoaded.robot && modelsLoaded.human) {
+                    const dist = humanGroup.position.distanceTo(new THREE.Vector3(0,0,0));
+                    simulateProductionData(); // 模拟产线数据
+                    updateDashboardAndRisk(dist); // 更新UI和风险图
+                }
+                timeAccumulator = 0;
+            }
+
+            updateCameraInteraction();
+            renderer.render(scene, camera);
+            
+            // 实时更新FPS
+            document.getElementById('val-fps').innerText = Math.round(1/delta);
+        }
+
+        // --- 逻辑A: 8米范围内移动 ---
+        function updateHumanMovement(delta) {
+            const speed = 1.8; 
+            const distSq = humanGroup.position.distanceToSquared(humanTarget);
+
+            if (distSq < 0.1) {
+                // 新的目标点生成算法：极坐标随机，限制在8米半径内
+                const angle = Math.random() * Math.PI * 2;
+                const radius = Math.sqrt(Math.random()) * CONFIG.limit.radius; // sqrt保证分布均匀
+                
+                humanTarget.set(Math.cos(angle) * radius, 0, Math.sin(angle) * radius);
+            }
+
+            const dir = new THREE.Vector3().subVectors(humanTarget, humanGroup.position).normalize();
+            humanGroup.position.add(dir.multiplyScalar(speed * delta));
+            humanGroup.lookAt(humanTarget);
+
+            // 轨迹更新
+            trailHistory.push(humanGroup.position.clone());
+            if(trailHistory.length > 200) trailHistory.shift();
+            const positions = ghostPath.geometry.attributes.position.array;
+            for(let i=0; i<positions.length; i++) positions[i] = 0;
+            trailHistory.forEach((pt, i) => {
+                positions[i*3] = pt.x; positions[i*3+1] = 0.2; positions[i*3+2] = pt.z;
+            });
+            ghostPath.geometry.attributes.position.needsUpdate = true;
+        }
+
+        // --- 逻辑B: 模拟产线数据变化 ---
+        function simulateProductionData() {
+            // 1. UPH 波动 (340 +/- 5)
+            const noiseUPH = Math.floor((Math.random() - 0.5) * 10);
+            document.getElementById('val-uph').innerText = (342 + noiseUPH);
+
+            // 2. CT 波动 (14.2 +/- 0.3)
+            const noiseCT = (Math.random() - 0.5) * 0.6;
+            document.getElementById('val-ct').innerText = (14.2 + noiseCT).toFixed(1) + "s";
+
+            // 3. 任务进度条增长
+            taskProgress += 1.5; // 每次增加 1.5%
+            if(taskProgress > 100) taskProgress = 0;
+            document.getElementById('val-progress-text').innerText = Math.floor(taskProgress) + "%";
+            document.getElementById('val-progress-bar').style.width = taskProgress + "%";
+
+            // 4. 网络延迟随机跳动
+            if(Math.random() > 0.7) {
+                document.getElementById('val-latency').innerText = Math.floor(20 + Math.random() * 15) + " ms";
+            }
+        }
+
+        // --- 逻辑C: 风险计算与图表更新 ---
+        function updateDashboardAndRisk(dist) {
+            // 1. 计算风险指数 (距离越近，风险越高，非线性)
+            // 安全距离 6m -> 风险 0
+            // 危险距离 0.5m -> 风险 100
+            let riskScore = 0;
+            if (dist < 6.0) {
+                // 简单的反比公式模拟
+                riskScore = Math.min(100, Math.pow((6.0 - dist) / 5.5, 2) * 100);
+                // 加入一点随机扰动
+                riskScore += (Math.random() - 0.5) * 5; 
+                riskScore = Math.max(0, Math.min(100, riskScore)); // Clamp 0-100
+            }
+
+            // 2. 更新风险图表
+            if (riskChartInst) {
+                const data = riskChartInst.data.datasets[0].data;
+                data.shift(); // 移除旧数据
+                data.push(riskScore); // 加入新数据
+                
+                // 颜色根据风险变红
+                const color = riskScore > 60 ? '#ef4444' : '#f59e0b';
+                riskChartInst.data.datasets[0].borderColor = color;
+                riskChartInst.update(); // 重绘
+            }
+
+            // 3. 更新数值显示
+            document.getElementById('val-risk-score').innerText = Math.floor(riskScore);
+            document.getElementById('val-risk-score').style.color = riskScore > 60 ? '#ef4444' : '#f59e0b';
+
+            // 4. 更新距离和UI状态 (原有逻辑)
+            document.getElementById('val-dist').innerText = dist.toFixed(2) + " m";
+            const pct = Math.min(Math.max((dist / 6) * 100, 0), 100);
+            document.getElementById('ssm-marker').style.left = pct + "%";
+
+            const elZone = document.getElementById('zone-status');
+            const elAlert = document.getElementById('ttc-container');
+            const elTTC = document.getElementById('val-ttc');
+
+            // 改变幽灵颜色
+            let ghostColor = CONFIG.human.color;
+            if (dist < 1.5) {
+                elZone.innerHTML = "⚠️ EMERGENCY STOP"; elZone.style.color = "#ef4444";
+                elAlert.classList.add('active'); elTTC.innerText = "HALT";
+                ghostColor = 0xff0000; // 危险红
+            } else if (dist < 3.0) {
+                elZone.innerHTML = "SPEED REDUCTION"; elZone.style.color = "#f59e0b";
+                elAlert.classList.remove('active'); elTTC.innerText = "SLOW";
+                ghostColor = 0xffaa00; // 警戒黄
+            } else {
+                elZone.innerHTML = "NORMAL OPERATION"; elZone.style.color = "#10b981";
+                elAlert.classList.remove('active'); elTTC.innerText = "SAFE";
+            }
+
+            humanGroup.traverse(c => {
+                if(c.isMesh) {
+                    c.material.color.setHex(ghostColor);
+                    c.material.emissive.setHex(ghostColor);
+                }
+            });
+            ghostPath.material.color.setHex(ghostColor);
+        }
+
+        // ========== 7. 交互控制 ==========
+        let isDragging = false, lastX = 0, lastY = 0;
+        let camTheta = 0, camPhi = 0.5, camRadius = 18; // 默认拉远一点
+        
+        function setupInteraction() {
+            const canvas = document.getElementById('canvas-container');
+            canvas.addEventListener('mousedown', e => { isDragging = true; lastX = e.clientX; lastY = e.clientY; });
+            window.addEventListener('mouseup', () => isDragging = false);
+            window.addEventListener('mousemove', e => {
+                if(!isDragging) return;
+                camTheta -= (e.clientX - lastX) * 0.005;
+                camPhi -= (e.clientY - lastY) * 0.005;
+                camPhi = Math.max(0.1, Math.min(Math.PI/2 - 0.1, camPhi)); 
+                lastX = e.clientX; lastY = e.clientY;
+            });
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+        }
+
+        function updateCameraInteraction() {
+            if(!isDragging) camTheta += 0.0003; // 慢速自动旋转
+            camera.position.x = camRadius * Math.sin(camPhi) * Math.sin(camTheta);
+            camera.position.z = camRadius * Math.sin(camPhi) * Math.cos(camTheta);
+            camera.position.y = camRadius * Math.cos(camPhi);
+            camera.lookAt(0, 1, 0);
+        }
+
+        // 启动
+        init();
+    </script>
+</body>
+</html>
